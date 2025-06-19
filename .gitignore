@@ -195,3 +195,5 @@ cython_debug/
 
 Jetson-Nano/model/detect
 Jetson-Nano/model/recognize
+exp/
+./attendance.db

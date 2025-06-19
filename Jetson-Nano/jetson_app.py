@@ -27,7 +27,7 @@ SERVER_IP = "10.42.0.1"
 SERVER_URL = "http://" + SERVER_IP + ":8000"
 YOLO_ENGINE_PATH = "model/detect/best.engine"
 RECOGNIZER_ENGINE_PATH = "model/recognize/model-r34.engine"
-YOLO_INPUT_SHAPE = (640, 640)  # (height, width)
+YOLO_INPUT_SHAPE = (320, 320)  # (height, width)
 RECOGNIZER_INPUT_SHAPE = (112, 112)  # (height, width)
 CONF_THRESHOLD = 0.5  # Ngưỡng tin cậy cho YOLO
 NMS_THRESHOLD = 0.4  # Ngưỡng cho Non-Maximum Suppression
@@ -35,11 +35,13 @@ COSINE_THRESHOLD = 0.35  # Ngưỡng nhận dạng, cần tinh chỉnh sau khi t
 frame_counter = 0
 RECOGNITION_INTERVAL = 25 # Chỉ nhận dạng 1 lần mỗi 5 frames
 face_identities = {} # Lưu trữ ID và tên của các khuôn mặt đang được theo dõi
+IOU_THRESHOLD = 0.4
 
 
-# --- Lớp Wrapper cho TensorRT (Đã tối ưu hóa) ---
+# --- Lớp Wrapper cho TensorRT ---
 class TRT_Engine:
-    def __init__(self, engine_path):
+    def __init__(self, engine_path, max_batch_size=1):
+        self.max_batch_size = max_batch_size
         self.logger = trt.Logger(trt.Logger.WARNING)
         with open(engine_path, "rb") as f, trt.Runtime(self.logger) as runtime:
             self.engine = runtime.deserialize_cuda_engine(f.read())
@@ -48,7 +50,8 @@ class TRT_Engine:
         self.inputs, self.outputs, self.bindings, self.stream = [], [], [], cuda.Stream()
 
         for binding in self.engine:
-            size = trt.volume(self.engine.get_binding_shape(binding))
+            # Tính toán size bộ nhớ dựa trên max_batch_size
+            size = abs(trt.volume(self.engine.get_binding_shape(binding))) * self.max_batch_size
             dtype = trt.nptype(self.engine.get_binding_dtype(binding))
 
             # Phân bổ bộ nhớ trên Host (CPU) và Device (GPU)
@@ -57,24 +60,40 @@ class TRT_Engine:
 
             self.bindings.append(int(device_mem))
             if self.engine.binding_is_input(binding):
-                self.inputs.append({'host': host_mem, 'device': device_mem})
+                self.inputs.append(
+                    {'host': host_mem, 'device': device_mem, 'shape': self.engine.get_binding_shape(binding)})
             else:
-                self.outputs.append({'host': host_mem, 'device': device_mem})
+                self.outputs.append(
+                    {'host': host_mem, 'device': device_mem, 'shape': self.engine.get_binding_shape(binding)})
 
     def __call__(self, host_input: np.ndarray):
+        # Lấy kích thước batch thực tế từ input
+        batch_size = host_input.shape[0]
+        if batch_size > self.max_batch_size:
+            raise ValueError(
+                f"Kích thước batch đầu vào ({batch_size}) lớn hơn max_batch_size đã cấu hình ({self.max_batch_size})")
+
+        # Chuẩn bị input và output buffers cho kích thước batch thực tế
+        host_input = np.ascontiguousarray(host_input)
+
         # Sao chép dữ liệu từ CPU sang GPU
-        np.copyto(self.inputs[0]['host'], host_input.ravel())
-        cuda.memcpy_htod_async(self.inputs[0]['device'], self.inputs[0]['host'], self.stream)
+        cuda.memcpy_htod_async(self.inputs[0]['device'], host_input, self.stream)
+
+        # Đặt kích thước batch cho context nếu cần (cho các model có dynamic shape)
+        # self.context.set_binding_shape(0, host_input.shape)
 
         # Thực thi model
         self.context.execute_async_v2(bindings=self.bindings, stream_handle=self.stream.handle)
+
+        # Tính toán kích thước output thực tế
+        output_shape = tuple([batch_size] + list(self.outputs[0]['shape'][1:]))
 
         # Lấy kết quả từ GPU về CPU
         cuda.memcpy_dtoh_async(self.outputs[0]['host'], self.outputs[0]['device'], self.stream)
         self.stream.synchronize()
 
-        # Trả về kết quả dưới dạng mảng numpy
-        return self.outputs[0]['host']
+        # Reshape và trả về đúng kích thước output
+        return self.outputs[0]['host'][:np.prod(output_shape)].reshape(output_shape)
 
 
 # --- CÁC HÀM XỬ LÝ AI (ĐÃ HOÀN THIỆN) ---
@@ -178,6 +197,35 @@ def preprocess_arcface(face_img):
     return input_tensor
 
 
+def calculate_iou(box1, box2):
+    """
+    Tính toán chỉ số Intersection over Union (IoU) giữa hai bounding box.
+    Cả hai box đều được giả định có 5 phần tử [x1, y1, x2, y2, confidence].
+    """
+    # Giải nén 5 giá trị và bỏ qua giá trị cuối cùng (confidence) bằng dấu gạch dưới "_"
+    x1_1, y1_1, x2_1, y2_1, _ = box1
+    x1_2, y1_2, x2_2, y2_2, _ = box2  # Sửa ở đây: thêm dấu "_"
+
+    # Tính toán diện tích phần giao nhau
+    xi1 = max(x1_1, x1_2)
+    yi1 = max(y1_1, y1_2)
+    xi2 = min(x2_1, x2_2)
+    yi2 = min(y2_1, y2_2)
+
+    inter_area = max(0, xi2 - xi1) * max(0, yi2 - yi1)
+
+    # Tính toán diện tích của mỗi box
+    box1_area = (x2_1 - x1_1) * (y2_1 - y1_1)
+    box2_area = (x2_2 - x1_2) * (y2_2 - y1_2)
+
+    # Tính toán diện tích phần hợp
+    union_area = box1_area + box2_area - inter_area
+
+    # Tính IoU
+    iou = inter_area / union_area if union_area > 0 else 0
+    return iou
+
+
 # --- Các hàm giao tiếp Server (Giữ nguyên) ---
 known_faces_cache = []
 
@@ -253,30 +301,27 @@ def ai_processing_loop():
     global latest_processed_frame, is_running
 
     print("Đang tải model...")
-    yolo_engine = TRT_Engine(YOLO_ENGINE_PATH)
-    arcface_engine = TRT_Engine(RECOGNIZER_ENGINE_PATH)
+    # Khởi tạo engine với max_batch_size để xử lý hàng loạt
+    yolo_engine = TRT_Engine(YOLO_ENGINE_PATH, max_batch_size=1)
+    arcface_engine = TRT_Engine(RECOGNIZER_ENGINE_PATH, max_batch_size=5)  # Cho phép xử lý tối đa 5 khuôn mặt 1 lúc
     print("Tải model thành công!")
 
     # --- Các biến cho logic tối ưu ---
     frame_counter = 0
-    RECOGNITION_INTERVAL = 10  # Chỉ nhận dạng 1 lần mỗi 10 frames
-    # Lưu trữ thông tin khuôn mặt đang được theo dõi: {track_id: {box, name, user_id, last_seen_frame}}
-    tracked_faces = {}
+    tracked_faces = {}  # {track_id: {box, name, user_id, last_seen_frame}}
     next_track_id = 0
 
     # --- Các biến cho giao tiếp server ---
     sync_with_server()
     last_sync_time = time.time()
     last_check_in = {}
-    last_sent_unknown = 0
-    CHECK_IN_COOLDOWN = 10  # Giây
-    UNKNOWN_SEND_COOLDOWN = 5  # Giây
+    CHECK_IN_COOLDOWN = 10
 
     # --- Khởi tạo Camera ---
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        print("Lỗi: Không thể mở camera.")
-        is_running = False
+        print("Lỗi: Không thể mở camera.");
+        is_running = False;
         return
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -286,46 +331,54 @@ def ai_processing_loop():
     fps_frame_count = 0
 
     while is_running:
-        # Đồng bộ server định kỳ
         if time.time() - last_sync_time > 60:
             sync_with_server()
             last_sync_time = time.time()
 
         ret, frame = cap.read()
         if not ret:
-            print("Hết frame hoặc camera bị ngắt.")
+            print("Hết frame hoặc camera bị ngắt.");
             break
 
         frame_counter += 1
 
-        # 1. Luôn chạy YOLO để phát hiện khuôn mặt
         yolo_input, scale, dx, dy = preprocess_yolo(frame, YOLO_INPUT_SHAPE)
         yolo_output = yolo_engine(yolo_input)
         current_boxes = postprocess_yolo(yolo_output, CONF_THRESHOLD, NMS_THRESHOLD, frame.shape[:2], scale, dx, dy)
         current_boxes = sorted(current_boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]), reverse=True)[:5]
 
-        # --- Logic chính: Chạy nhận dạng hoặc chỉ theo dõi ---
-        if frame_counter % RECOGNITION_INTERVAL == 0:
-            # === FRAME NHẬN DẠNG (RECOGNITION FRAME) ===
-            face_crops = []
-            box_indices = []  # Lưu chỉ số của các box cần nhận dạng
+        # --- Logic Tracking và Nhận dạng ---
+        matched_track_ids = set()
+        unmatched_boxes = []
 
-            for i, box in enumerate(current_boxes):
-                x1, y1, x2, y2, _ = box
-                face_crop = frame[y1:y2, x1:x2]
-                if face_crop.size > 0:
-                    face_crops.append(face_crop)
-                    box_indices.append(i)
+        # Cố gắng khớp các box hiện tại với các track cũ
+        for box in current_boxes:
+            best_iou = 0
+            best_track_id = -1
+            for track_id, data in tracked_faces.items():
+                iou = calculate_iou(box, data['box'])
+                if iou > IOU_THRESHOLD and iou > best_iou:
+                    best_iou = iou
+                    best_track_id = track_id
+
+            if best_track_id != -1:
+                tracked_faces[best_track_id]['box'] = box  # Cập nhật vị trí mới
+                tracked_faces[best_track_id]['last_seen_frame'] = frame_counter
+                matched_track_ids.add(best_track_id)
+            else:
+                unmatched_boxes.append(box)
+
+        # Chạy nhận dạng cho các box mới xuất hiện (unmatched)
+        if frame_counter % RECOGNITION_INTERVAL == 0 and unmatched_boxes:
+            face_crops = [frame[y1:y2, x1:x2] for x1, y1, x2, y2, _ in unmatched_boxes]
 
             if face_crops:
-                # Xử lý hàng loạt (Batch Processing)
                 batch_input = np.array([preprocess_arcface(crop).squeeze() for crop in face_crops])
                 raw_embeddings = arcface_engine(batch_input).reshape(len(face_crops), -1)
 
                 for i, raw_embedding in enumerate(raw_embeddings):
                     embedding = raw_embedding / np.linalg.norm(raw_embedding)
 
-                    # So sánh với CSDL
                     best_match_info = None
                     if known_faces_cache:
                         similarities = [np.dot(embedding, known['embedding']) for known in known_faces_cache]
@@ -333,75 +386,48 @@ def ai_processing_loop():
                         if similarities[best_idx] > COSINE_THRESHOLD:
                             best_match_info = known_faces_cache[best_idx]
 
-                    # Cập nhật thông tin cho tracked_faces
-                    box_idx = box_indices[i]
-                    original_box = current_boxes[box_idx]
-
-                    # Logic tracking đơn giản dựa trên IOU hoặc vị trí sẽ tốt hơn,
-                    # ở đây ta cập nhật lại toàn bộ cho đơn giản
+                    # Tạo một track mới cho khuôn mặt này
                     tracked_faces[next_track_id] = {
-                        "box": original_box,
+                        "box": unmatched_boxes[i],
                         "name": best_match_info['name'] if best_match_info else "Unknown",
                         "user_id": best_match_info['id'] if best_match_info else None,
                         "last_seen_frame": frame_counter
                     }
                     next_track_id += 1
 
-                    # Gửi thông tin nếu cần
-                    if best_match_info:
-                        user_id = best_match_info['id']
-                        if time.time() - last_check_in.get(user_id, 0) > CHECK_IN_COOLDOWN:
-                            threading.Thread(target=check_in, args=(user_id,), daemon=True).start()
-                            last_check_in[user_id] = time.time()
-                    else:
-                        # if time.time() - last_sent_unknown > UNKNOWN_SEND_COOLDOWN:
-                        #     # threading.Thread(target=send_unknown_capture, args=(face_crops[i], embedding),
-                        #     #                  daemon=True).start()
-                        #     last_sent_unknown = time.time()
-                        similarity_text = f"{np.max(similarities) if known_faces_cache else 0:.2f}"
-                        label = f"Unknown: {similarity_text}"
+        for track_id, data in tracked_faces.items():
+            if data['user_id'] is not None:
+                user_id = data['user_id']
+                if time.time() - last_check_in.get(user_id, 0) > CHECK_IN_COOLDOWN:
+                    threading.Thread(target=check_in, args=(user_id,), daemon=True).start()
+                    last_check_in[user_id] = time.time()
 
-                        # Vẽ lên frame
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                        cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-
-            # Xóa các khuôn mặt cũ không còn được nhìn thấy
-            tracked_faces = {tid: data for tid, data in tracked_faces.items() if
-                             frame_counter - data['last_seen_frame'] < RECOGNITION_INTERVAL}
-
-        else:
-            # === FRAME THEO DÕI (TRACKING FRAME) ===
-            # Đây là phần logic đơn giản, có thể cải tiến bằng các thuật toán tracking thực thụ (ví dụ: IOU tracking)
-            # Tạm thời, chúng ta sẽ không cập nhật, chỉ vẽ lại các box cũ.
-            # Để mượt hơn, bạn cần một logic tracking để khớp current_boxes với tracked_faces
-            pass
+        # Xóa các track cũ không còn xuất hiện
+        tracked_faces = {tid: data for tid, data in tracked_faces.items() if
+                         frame_counter - data['last_seen_frame'] < RECOGNITION_INTERVAL * 2}
 
         # --- Vẽ kết quả lên frame ---
         for track_id, data in tracked_faces.items():
-            x1, y1, x2, y2, conf = data['box']
+            x1, y1, x2, y2, _ = data['box']
             name = data['name']
-            user_id = data['user_id']
-
-            color = (0, 255, 0) if user_id is not None else (0, 0, 255)
+            color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             cv2.putText(frame, name, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
         # Tính và hiển thị FPS
         fps_frame_count += 1
         elapsed_time = time.time() - fps_start_time
-        fps = fps_frame_count / elapsed_time
-        cv2.putText(frame, f"FPS: {fps:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
-        if elapsed_time > 2:  # Reset sau mỗi 2 giây để FPS chính xác hơn
+        if elapsed_time > 1:
+            fps = fps_frame_count / elapsed_time
+            cv2.putText(frame, f"FPS: {fps:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
             fps_frame_count = 0
             fps_start_time = time.time()
 
-        # Cập nhật frame cho server stream
         latest_processed_frame = frame.copy()
 
     cap.release()
     is_running = False
     print("Vòng lặp AI đã kết thúc.")
-
 
 # --- Chạy chương trình ---
 if __name__ == "__main__":
