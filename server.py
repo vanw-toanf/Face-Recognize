@@ -24,7 +24,6 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
-# --- Định nghĩa Models cho CSDL (Giữ nguyên) ---
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
@@ -45,28 +44,26 @@ class AttendanceLog(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     timestamp = Column(DateTime, default=datetime.utcnow)
-    user = relationship("User")  # Thêm để tiện truy vấn tên
+    user = relationship("User")
 
 
 class UnknownCapture(Base):
     __tablename__ = "unknown_captures"
     id = Column(Integer, primary_key=True, index=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
-    image_data = Column(LargeBinary)  # Lưu dữ liệu ảnh
-    embedding_json = Column(String)  # Lưu embedding của ảnh này
+    image_data = Column(LargeBinary)
+    embedding_json = Column(String)
 
 
 Base.metadata.create_all(bind=engine)
 
 
-# --- Pydantic Schemas (Định nghĩa cấu trúc dữ liệu API) ---
 class CheckInRequest(BaseModel):
     user_id: int
 
 
-# <<< THAY ĐỔI Ở ĐÂY: Tạo schema mới phù hợp với client Jetson ---
 class FaceCacheData(BaseModel):
-    id: int  # ID của user
+    id: int
     name: str
     embedding: List[float]
 
@@ -170,20 +167,17 @@ async def add_user_from_capture(request: Request, db: Session = Depends(get_db))
 
 def get_embedding_from_image(image_bytes: bytes) -> List[float]:
     """
-    Trích xuất embedding từ ảnh bằng model ONNX, đảm bảo nhất quán với Jetson.
+    Trích xuất embedding từ ảnh bằng model ONNX R34.
     """
     try:
         # 1. Tải model ONNX
-        # (Bạn có thể tải model một lần bên ngoài hàm để tối ưu hiệu năng)
         ort_session = onnxruntime.InferenceSession("exp/recognize/model-r34.onnx")
         input_name = ort_session.get_inputs()[0].name
 
-        # 2. Đọc và tiền xử lý ảnh (giống hệt jetson_app.py)
+        # 2. Đọc và tiền xử lý ảnh
         nparr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-        # TODO: Cần một bước phát hiện khuôn mặt ở đây để crop lại
-        # Tạm thời, ta giả định ảnh tải lên đã là ảnh khuôn mặt
         face_crop = img
 
         img_resized = cv2.resize(face_crop, (112, 112), interpolation=cv2.INTER_AREA)
@@ -205,7 +199,7 @@ def get_embedding_from_image(image_bytes: bytes) -> List[float]:
         print(f"Lỗi khi trích xuất embedding bằng ONNX: {e}")
         return None
 
-# API MỚI: Xử lý việc thêm người dùng thủ công
+# --- API để thêm người dùng thủ công từ ảnh ---
 @app.post("/api/users/manual-add")
 async def manual_add_user(name: str = Form(...), image: UploadFile = File(...), db: Session = Depends(get_db)):
     image_bytes = await image.read()
@@ -235,7 +229,7 @@ async def manual_add_user(name: str = Form(...), image: UploadFile = File(...), 
 # --- Giao diện Web đơn giản (thêm bảng logs) ---
 @app.get("/", response_class=HTMLResponse)
 def main_page(db: Session = Depends(get_db)):
-    JETSON_IP = "10.42.0.215"  # Giữ nguyên IP của Jetson
+    JETSON_IP = "10.42.0.215"
 
     # Lấy 10 log điểm danh gần nhất
     logs_html = ""

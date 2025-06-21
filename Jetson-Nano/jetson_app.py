@@ -1,11 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Script nhận dạng khuôn mặt thời gian thực trên Jetson Nano.
-- Sử dụng YOLOv5n để phát hiện khuôn mặt.
-- Sử dụng ArcFace (ResNet34) để trích xuất đặc trưng.
-- Giao tiếp với server để đồng bộ và điểm danh.
-- Stream video đã xử lý qua giao thức HTTP.
-"""
 import tensorrt as trt
 import pycuda.driver as cuda
 import pycuda.autoinit
@@ -33,7 +25,7 @@ CONF_THRESHOLD = 0.5  # Ngưỡng tin cậy cho YOLO
 NMS_THRESHOLD = 0.4  # Ngưỡng cho Non-Maximum Suppression
 COSINE_THRESHOLD = 0.35  # Ngưỡng nhận dạng, cần tinh chỉnh sau khi test
 frame_counter = 0
-RECOGNITION_INTERVAL = 25 # Chỉ nhận dạng 1 lần mỗi 5 frames
+RECOGNITION_INTERVAL = 25 # Chỉ nhận dạng 1 lần mỗi 25 frames
 face_identities = {} # Lưu trữ ID và tên của các khuôn mặt đang được theo dõi
 IOU_THRESHOLD = 0.4
 
@@ -96,7 +88,7 @@ class TRT_Engine:
         return self.outputs[0]['host'][:np.prod(output_shape)].reshape(output_shape)
 
 
-# --- CÁC HÀM XỬ LÝ AI (ĐÃ HOÀN THIỆN) ---
+# --- Các hàm tiền xử lý và hậu xử lý ---
 
 def preprocess_yolo(img, input_size=(640, 640)):
     """
@@ -139,9 +131,9 @@ def postprocess_yolo(output, conf_thres, nms_thres, original_shape, scale, dx, d
     """
     h, w = original_shape
 
-    # Output của YOLOv5 TensorRT thường là (1, số_box, 6) [x, y, w, h, conf, class_id]
+    # Output của YOLOv5 TensorRT: (1, số_box, 6) [x, y, w, h, conf, class_id]
     # Hoặc (1, 6, số_box) -> cần reshape
-    output = output.reshape(1, -1, 6)  # Giả sử có 1 class là "face"
+    output = output.reshape(1, -1, 6)  # có 1 class là "face"
 
     boxes, confidences = [], []
     for det in output[0]:
@@ -200,11 +192,11 @@ def preprocess_arcface(face_img):
 def calculate_iou(box1, box2):
     """
     Tính toán chỉ số Intersection over Union (IoU) giữa hai bounding box.
-    Cả hai box đều được giả định có 5 phần tử [x1, y1, x2, y2, confidence].
+    Cả hai box đều có 5 phần tử [x1, y1, x2, y2, confidence].
     """
     # Giải nén 5 giá trị và bỏ qua giá trị cuối cùng (confidence) bằng dấu gạch dưới "_"
     x1_1, y1_1, x2_1, y2_1, _ = box1
-    x1_2, y1_2, x2_2, y2_2, _ = box2  # Sửa ở đây: thêm dấu "_"
+    x1_2, y1_2, x2_2, y2_2, _ = box2
 
     # Tính toán diện tích phần giao nhau
     xi1 = max(x1_1, x1_2)
@@ -226,7 +218,7 @@ def calculate_iou(box1, box2):
     return iou
 
 
-# --- Các hàm giao tiếp Server (Giữ nguyên) ---
+# --- Các hàm giao tiếp Server ---
 known_faces_cache = []
 
 
@@ -266,18 +258,17 @@ def send_unknown_capture(face_image, embedding):
         print(f"Lỗi gửi khuôn mặt lạ: {e}")
 
 
-# --- Logic cho ứng dụng FastAPI (Giữ nguyên) ---
+# --- Logic cho ứng dụng FastAPI ---
 app = FastAPI()
 latest_processed_frame = None
 is_running = True
 
 
 def run_streaming_server():
-    # Thêm 2 dòng này để tạo và set event loop cho luồng mới
+    # tạo và set event loop cho luồng mới
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    # Các dòng còn lại giữ nguyên
     config = uvicorn.Config(app, host="0.0.0.0", port=8001, log_level="warning")
     server = uvicorn.Server(config)
     server.run()
@@ -296,17 +287,15 @@ def video_feed():
     return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
-# --- Vòng lặp AI chính (ĐÃ HOÀN THIỆN) ---
+# --- Hàm AI chính ---
 def ai_processing_loop():
     global latest_processed_frame, is_running
 
     print("Đang tải model...")
-    # Khởi tạo engine với max_batch_size để xử lý hàng loạt
     yolo_engine = TRT_Engine(YOLO_ENGINE_PATH, max_batch_size=1)
     arcface_engine = TRT_Engine(RECOGNIZER_ENGINE_PATH, max_batch_size=5)  # Cho phép xử lý tối đa 5 khuôn mặt 1 lúc
     print("Tải model thành công!")
 
-    # --- Các biến cho logic tối ưu ---
     frame_counter = 0
     tracked_faces = {}  # {track_id: {box, name, user_id, last_seen_frame}}
     next_track_id = 0
