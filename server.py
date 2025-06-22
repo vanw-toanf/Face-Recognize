@@ -167,10 +167,10 @@ async def add_user_from_capture(request: Request, db: Session = Depends(get_db))
 
 def get_embedding_from_image(image_bytes: bytes) -> List[float]:
     """
-    Trích xuất embedding từ ảnh bằng model ONNX R34.
+    Trích xuất embedding từ ảnh bằng models ONNX R34.
     """
     try:
-        # 1. Tải model ONNX
+        # 1. Tải models ONNX
         ort_session = onnxruntime.InferenceSession("exp/recognize/model-r34.onnx")
         input_name = ort_session.get_inputs()[0].name
 

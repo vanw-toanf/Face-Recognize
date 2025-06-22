@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Face Recognition Dashboard</title>
+    <style>
+        body { font-family: sans-serif; display: flex; gap: 20px; padding: 10px; background-color: #f4f4f9; }
+        .column { padding: 20px; border: 1px solid #ddd; border-radius: 8px; background-color: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1, h2 { color: #333; border-bottom: 2px solid #5c67f2; padding-bottom: 5px; }
+        img.stream { border: 2px solid #333; width: 100%; max-width: 640px; background-color: #000; }
+        form div { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"], input[type="file"] { width: calc(100% - 16px); padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        button, .button { cursor: pointer; padding: 10px 15px; background-color: #5c67f2; color: white; border: none; border-radius: 4px; font-size: 16px; text-decoration: none; display: inline-block; }
+        button:hover, .button:hover { background-color: #4a54c2; }
+        button.delete { background-color: #d9534f; }
+        button.delete:hover { background-color: #c9302c; }
+        ul { list-style-type: none; padding-left: 0; }
+        li { background-color: #eef; padding: 8px; border-radius: 4px; margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center; }
+    </style>
+</head>
+<body>
+    <div class="column" style="flex: 2;">
+        <h1>Live Stream from Jetson</h1>
+        <img class="stream" src="http://10.42.0.215:8001/video_feed" alt="Live stream not available.">
+    </div>
+
+    <div class="column" style="flex: 1;">
+        <h2>Thêm/Cập nhật thủ công</h2>
+        <form action="/api/users/manual-add" method="post" enctype="multipart/form-data">
+            <div>
+                <label for="name">Tên người dùng:</label>
+                <input type="text" id="name" name="name" required>
+            </div>
+            <div>
+                <label for="image">Ảnh khuôn mặt:</label>
+                <input type="file" id="image" name="image" accept="image/*" required>
+            </div>
+            <div>
+                <button type="submit">Thêm / Cập nhật</button>
+            </div>
+        </form>
+        <hr>
+        <h2>Danh sách người dùng</h2>
+        <ul id="user-list">
+            {% for user in users %}
+            <li>
+                <span>{{ user.name }} (ID: {{ user.id }})</span>
+                <form action="/api/users/delete/{{ user.id }}" method="post" style="display: inline;" onsubmit="return confirm('Bạn có chắc chắn muốn xóa người dùng {{ user.name }} và toàn bộ dữ liệu của họ không?');">
+                    <button class="delete" type="submit">Xóa</button>
+                </form>
+            </li>
+            {% else %}
+            <li>Chưa có người dùng nào.</li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <div class="column" style="flex: 1;">
+        <h2>Điểm danh gần đây</h2>
+        <ul>
+            {% for log in logs %}
+            <li>{{ log.user.name }} lúc {{ log.timestamp.strftime('%d-%m-%Y %H:%M:%S') }}</li>
+            {% else %}
+            <li>Chưa có lượt điểm danh nào.</li>
+            {% endfor %}
+        </ul>
+    </div>
+</body>
+</html>

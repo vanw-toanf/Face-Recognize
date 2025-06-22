@@ -193,7 +193,10 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-Jetson-Nano/model/detect
-Jetson-Nano/model/recognize
+Jetson-Nano/models/detect
+Jetson-Nano/models/recognize
 exp/
 ./attendance.db
+
+server.py
+Jetson-Nano/jetson_app.py
