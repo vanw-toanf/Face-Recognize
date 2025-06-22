@@ -1,8 +1,8 @@
-create file to auto run the button manager on boot
+Create file to auto run the button manager on boot
 
-''' bash
+``` bash
 sudo vi /etc/systemd/system/facerec-manager.service
-'''
+```
 
 ```/etc/systemd/system/facerec-manager.service
 [Unit]
@@ -19,9 +19,9 @@ User=vanwtoanf
 
 [Install]
 WantedBy=multi-user.target
-'''
+```
 
-''' bash
+``` bash
 sudo systemctl daemon-reload
 sudo systemctl enable facerec-manager.service
 sudo systemctl start facerec-manager.service
