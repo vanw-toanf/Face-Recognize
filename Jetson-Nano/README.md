@@ -4,7 +4,9 @@ Create file to auto run the button manager on boot
 sudo vi /etc/systemd/system/facerec-manager.service
 ```
 
-```/etc/systemd/system/facerec-manager.service
+Add the following content to the file:
+
+```ini
 [Unit]
 Description=Face Recognition Button Manager
 After=network.target
