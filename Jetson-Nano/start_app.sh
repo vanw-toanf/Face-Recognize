@@ -7,4 +7,4 @@ cd "$(dirname "$0")"
 source ../../env/bin/activate
 
 # Chạy ứng dụng nhận diện với LD_PRELOAD
-LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libgomp.so.1 python3 jetson_app.py
+LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libgomp.so.1 python3 main.py

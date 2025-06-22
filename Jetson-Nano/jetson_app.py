@@ -17,15 +17,15 @@ import asyncio
 # --- CẤU HÌNH ---
 SERVER_IP = "10.42.0.1"
 SERVER_URL = "http://" + SERVER_IP + ":8000"
-YOLO_ENGINE_PATH = "model/detect/best.engine"
-RECOGNIZER_ENGINE_PATH = "model/recognize/model-r34.engine"
+YOLO_ENGINE_PATH = "models/detect/best.engine"
+RECOGNIZER_ENGINE_PATH = "models/recognize/model-r34.engine"
 YOLO_INPUT_SHAPE = (320, 320)  # (height, width)
 RECOGNIZER_INPUT_SHAPE = (112, 112)  # (height, width)
 CONF_THRESHOLD = 0.5  # Ngưỡng tin cậy cho YOLO
 NMS_THRESHOLD = 0.4  # Ngưỡng cho Non-Maximum Suppression
 COSINE_THRESHOLD = 0.35  # Ngưỡng nhận dạng, cần tinh chỉnh sau khi test
 frame_counter = 0
-RECOGNITION_INTERVAL = 25 # Chỉ nhận dạng 1 lần mỗi 25 frames
+RECOGNITION_INTERVAL = 10 # Chỉ nhận dạng 1 lần mỗi 10 frames
 face_identities = {} # Lưu trữ ID và tên của các khuôn mặt đang được theo dõi
 IOU_THRESHOLD = 0.4
 
@@ -71,10 +71,10 @@ class TRT_Engine:
         # Sao chép dữ liệu từ CPU sang GPU
         cuda.memcpy_htod_async(self.inputs[0]['device'], host_input, self.stream)
 
-        # Đặt kích thước batch cho context nếu cần (cho các model có dynamic shape)
+        # Đặt kích thước batch cho context nếu cần (cho các models có dynamic shape)
         # self.context.set_binding_shape(0, host_input.shape)
 
-        # Thực thi model
+        # Thực thi models
         self.context.execute_async_v2(bindings=self.bindings, stream_handle=self.stream.handle)
 
         # Tính toán kích thước output thực tế
@@ -92,7 +92,7 @@ class TRT_Engine:
 
 def preprocess_yolo(img, input_size=(640, 640)):
     """
-    Tiền xử lý ảnh cho model YOLOv5.
+    Tiền xử lý ảnh cho models YOLOv5.
     - Resize ảnh với padding (letterbox) để giữ nguyên tỉ lệ.
     - Chuẩn hóa giá trị pixel về [0, 1].
     - Chuyển layout từ HWC sang CHW.
@@ -291,10 +291,10 @@ def video_feed():
 def ai_processing_loop():
     global latest_processed_frame, is_running
 
-    print("Đang tải model...")
+    print("Đang tải models...")
     yolo_engine = TRT_Engine(YOLO_ENGINE_PATH, max_batch_size=1)
     arcface_engine = TRT_Engine(RECOGNIZER_ENGINE_PATH, max_batch_size=5)  # Cho phép xử lý tối đa 5 khuôn mặt 1 lúc
-    print("Tải model thành công!")
+    print("Tải models thành công!")
 
     frame_counter = 0
     tracked_faces = {}  # {track_id: {box, name, user_id, last_seen_frame}}
