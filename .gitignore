@@ -200,3 +200,4 @@ exp/
 
 server.py
 Jetson-Nano/jetson_app.py
+Jetson-Nano/request.txt
