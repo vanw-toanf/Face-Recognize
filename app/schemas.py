@@ -18,7 +18,7 @@ class UserInfo(BaseModel):
     name: str
 
     class Config:
-        orm_mode = True # Cho phép Pydantic đọc dữ liệu từ object ORM
+        orm_mode = True
 
 # Dùng cho API hiển thị các ảnh chưa nhận dạng
 class UnknownCaptureInfo(BaseModel):

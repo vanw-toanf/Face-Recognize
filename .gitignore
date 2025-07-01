@@ -201,3 +201,5 @@ attendance.db
 server.py
 Jetson-Nano/jetson_app.py
 Jetson-Nano/request.txt
+Jetson-Nano/stats_log.csv
+bao-cao

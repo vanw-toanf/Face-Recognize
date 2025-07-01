@@ -22,7 +22,7 @@ templates = Jinja2Templates(directory="app/templates")
 
 @app.get("/", response_class=HTMLResponse)
 def main_page(request: Request, db: Session = Depends(get_db)):
-    logs = db.query(models.AttendanceLog).options(sqlalchemy.orm.joinedload(models.AttendanceLog.user)).order_by(models.AttendanceLog.timestamp.desc()).limit(10).all()
+    logs = db.query(models.AttendanceLog).options(sqlalchemy.orm.joinedload(models.AttendanceLog.user)).order_by(models.AttendanceLog.timestamp.desc()).limit(20).all()
     users = db.query(models.User).order_by(models.User.name).all()
     return templates.TemplateResponse("index.html", {"request": request, "logs": logs, "users": users})
 
